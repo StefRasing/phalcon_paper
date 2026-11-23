@@ -1,0 +1,505 @@
+\documentclass[letterpaper]{article} % DO NOT CHANGE THIS
+\usepackage[submission]{aaai2027}  % DO NOT CHANGE THIS
+% The serif, sans-serif, and monospaced fonts are loaded automatically by
+% aaai2027.sty (newtxtext, helvet, courier). DO NOT add \usepackage{times},
+% \usepackage{helvet}, \usepackage{courier}, or any other font package.
+\usepackage[hyphens]{url}  % DO NOT CHANGE THIS
+\usepackage{graphicx} % DO NOT CHANGE THIS
+\urlstyle{rm} % DO NOT CHANGE THIS
+\def\UrlFont{\rm}  % DO NOT CHANGE THIS
+\usepackage{natbib}  % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\usepackage{caption} % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\frenchspacing  % DO NOT CHANGE THIS
+
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\pdfinfo{
+/TemplateVersion (2027.1)
+}
+\setcounter{secnumdepth}{0}
+
+\title{PHALCON: Discovering Intermediate Goals from Partial Success in Program Synthesis}
+\author{}
+\affiliations{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+% Write the abstract here.
+\end{abstract}
+
+\section{Introduction}
+
+\noindent\textbf{Introduction TODOs}
+\begin{itemize}
+    \item Add answers and conclusions to these questions.
+\end{itemize}
+
+Programming by example (PBE), or inductive program synthesis (IPS),
+is the combinatorial search problem of finding a function that correctly
+maps given input examples to their corresponding output examples.
+The search space is too large to explore exhaustively, so IPS techniques
+rely on pruning infeasible regions or guiding search toward promising
+regions.
+
+Failure-driven approaches use incorrect behavior to prune the search
+space. Counterexample-guided synthesis finds an input on which a candidate
+fails and uses it to rule out candidates with the same failure
+\citep{solarlezama2006sketching}. Success-driven approaches use successful
+behavior to identify promising regions. Probe learns from partial
+solutions to decide what to try next \citep{barke2020probe}. BUSTLE
+learns which pieces of a program are likely to be useful, and CrossBeam
+learns how to combine them. Both learn from solutions to training tasks
+and reuse that guidance across tasks in the same domain
+\citep{odena2021bustle,shi2022crossbeam}.
+
+These approaches learn from complete solutions or from partial solutions
+that completely solve some examples.
+But search can stall before any candidate produces a correct output on
+even one example. We therefore ask:
+\textbf{How can a synthesizer extract explicit goals from candidates
+that do not produce a correct output on any example?}
+
+We use properties to set explicit goals. A property
+captures a detail of an output, and the goal is to match the target program on
+that detail. For example, a string-length property sets the
+goal of producing a string of the same length as the target, without
+specifying its characters. Or consider a task that asks a program to turn
+\texttt{John Doe} into \texttt{J Doe}. A candidate that returns
+\texttt{J} gets the initial right but leaves out the surname. The
+property \(\mathrm{first}(y)\) takes the first character of an output \(y\) and
+returns \texttt{J} for both outputs. Using this property as a goal
+guides the next search toward programs whose outputs start with the
+expected initial.
+
+The first character is an obvious choice in this example. But for a new
+task, the synthesizer has to decide which property captures progress
+it can build on. To make that choice, we introduce
+PHALCON, a synthesis method that turns a behavior already
+observed on the current task into an explicit goal for the next round of
+search. When search stalls, PHALCON looks for a property that at least
+one candidate gets right on every example. PHALCON prefers goals that
+fewer candidates meet because they give stronger guidance. As it adds
+new goals, it carries forward the goals from earlier rounds.
+
+We compare synthesis performance on SyGuS strings, SyGuS bit-vectors,
+and ARC to answer three research questions.
+
+\begin{enumerate}
+    \item Is it better to keep searching for a stronger goal or stop
+    once a goal is strong enough?
+    \item Is it better to find goals one at a time than all at once?
+    \item Is it better to find goals for each task than to reuse the same goals across tasks?
+\end{enumerate}
+
+% Results summary for RQ1: report the outcome of the agreement-threshold comparison.
+% Results summary for RQ2: report the outcome of the one-at-a-time versus batch comparison.
+% Results summary for RQ3: report the outcome of the per-task versus domain-wide comparison.
+
+\section{Setting IPS Goals through Properties}
+\label{sec:behavioral-goals}
+
+Before explaining how PHALCON sets explicit goals, we introduce
+inductive program synthesis and the properties used to express those
+goals.
+
+\subsection{Inductive Program Synthesis}
+In inductive program synthesis (IPS), a context-free grammar defines
+the program space \(\mathcal{P}\). The specification is a finite set
+of input--output examples \(E=\{(x_i,y_i^*)\}_{i=1}^{n}\), where
+\(y_i^*\) is the target output for input \(x_i\).
+A program \(p\in\mathcal{P}\) solves \(E\) if \(p(x_i)=y_i^*\)
+for every \(i\). Table~\ref{tab:abbreviation-examples} gives three
+examples for the name-abbreviation task from the introduction.
+
+\begin{table}[hb]
+  \centering
+  \begin{tabular}{ll}
+    \toprule
+    Input \(x_i\) & Target output \(y_i^*\) \\
+    \midrule
+    John Doe & J Doe \\
+    Mayur Naik & M Naik \\
+    Nimit Singh & N Singh \\
+    \bottomrule
+  \end{tabular}
+  \caption{Input--output examples for name abbreviation.}
+  \label{tab:abbreviation-examples}
+\end{table}
+
+\subsection{Properties and Agreement}
+Let \(\mathcal{X}\) and \(\mathcal{Y}\) be the input and output
+domains, so \(x_i\in\mathcal{X}\) and \(y_i^*\in\mathcal{Y}\).
+A \emph{property} is a function
+\(\pi\colon\mathcal{X}\times\mathcal{Y}\to V_\pi\) that describes
+a detail of an input--output pair. A property may return any type of
+value, with its own value domain \(V_\pi\). The property from the
+introduction, \(\pi(x,y)=\mathrm{first}(y)\), returns the first
+character of the output string.
+
+A property can be used to set an intermediate goal for synthesis.
+Before finding a complete solution, we can look for programs that
+behave like a solution with respect to that property, which we call
+\emph{agreement}. A program \(p\) agrees with a property \(\pi\) if
+\[
+  \pi(x_i,p(x_i))=\pi(x_i,y_i^*) \quad \forall i\in\{1,\ldots,n\}.
+\]
+For the first-character property, agreement requires the outputs to
+start with \texttt{J}, \texttt{M}, and \texttt{N}, respectively,
+so the program \(p(x)=\mathrm{first}(x)\) agrees with the property
+\(\pi(x,y)=\mathrm{first}(y)\).
+
+\subsection{Generating Candidate Properties}
+The \emph{property grammar} \(G_\pi\) extends the program grammar
+with a rule introducing \(y\), a symbol of the task's output type.
+In each round, we enumerate expressions bottom-up with a budget of
+\(n_\pi\) expression evaluations. Candidate properties must use \(y\).
+We prune observationally equivalent expressions using their values
+on the target and current population input--output pairs.
+
+\section{Setting and Satisfying Behavioral Goals}
+When synthesis stalls, PHALCON uses the programs found so far to
+choose an attainable, selective goal. It adds one goal at a time and
+uses genetic programming to search for programs that satisfy the
+accumulated goals.
+
+\subsection{Setting Behavioral Goals}
+To decide which goals to pursue, PHALCON uses the programs found
+by a stalled synthesis attempt. Let \(F\subseteq\mathcal{P}\) be
+this population. The agreement count for a property \(\pi\) is
+\[
+  A_F(\pi)=\bigl|\{p\in F : p\mbox{ agrees with }\pi\}\bigr|.
+\]
+
+\paragraph{Attainability.}
+We use properties to describe details that the last synthesis attempt
+got right. A property therefore needs at least one agreeing program
+in \(F\), so \(A_F(\pi)>0\). We call such a property
+\emph{attainable} because finding one agreeing program gives us
+evidence that we might find others with the same behavior. If \(F\)
+contains a program that returns only the first character of each
+input, then \(\pi(x,y)=\mathrm{first}(y)\) is attainable because
+that program agrees with \(\pi\). A non-attainable goal can be
+problematic because it may give the search no guidance. For instance,
+the identity property \(\pi(x,y)=y\) simply repeats the original
+objective of matching every target output exactly.
+
+\paragraph{Selectivity.}
+A goal should be attainable and guide the search. The fewer programs
+from \(F\) agree with a property, the more narrowly it directs the
+next search. Given a set \(C\) of properties under consideration,
+we prefer a property that achieves
+\[
+  \min_{\pi\in C:\,A_F(\pi)>0} A_F(\pi).
+\]
+Under this criterion, a property is most selective when
+\(A_F(\pi)=1\). For example, if only one of \(|F|=4\) programs produces the correct
+initials on all three inputs, the first-character property is
+selective because it singles out that program. A constant property,
+such as \(\pi(x,y)=1\), has the same value for every output, so all
+four programs agree and it gives no search direction.
+
+\paragraph{One by One.}
+Two highly selective properties can impose the same or similar
+constraints. For example, \(\mathrm{first}(y)\) and
+\(\mathrm{startswith}(y,\mathrm{first}(x))\) agree with the same
+programs on the abbreviation examples, since every target starts
+with its input's initial. Both can look selective in the same
+population, but choosing both gives the search only one constraint
+to meet.
+To avoid spending selections on redundant properties, PHALCON
+selects them \emph{one by one}. After selecting a property, it
+searches for programs that agree with that property and all
+previously selected properties. It then uses the new population to
+choose the next property. When a round achieves the accumulated
+goals, a property redundant with those goals agrees with every
+program in the resulting population and loses its selectivity.
+
+\subsection{Satisfying Behavioral Goals}
+After adding a goal, PHALCON uses genetic programming (GP) to search
+for programs that satisfy the accumulated goals. GP evolves a
+population by favoring lower-cost candidates and generating programs
+similar to them.
+
+Let \(\Pi\) be the set of properties selected so far. For each
+input--output example, we count the selected properties whose values
+differ between the candidate and target outputs. Summing these counts
+across examples gives the cost that GP minimizes:
+\[
+  c_\Pi(p)=\sum_{i=1}^{n}
+    \bigl|\{\pi\in\Pi : \pi(x_i,p(x_i))\ne\pi(x_i,y_i^*)\}\bigr|.
+\]
+Each disagreement adds one to the cost. A program satisfies all
+accumulated goals when its cost reaches zero.
+
+The next section details how PHALCON sets attainable and selective
+goals one by one and uses GP to search for programs that satisfy
+them.
+
+\section{PHALCON Pseudocode}
+\label{sec:phalcon-pseudocode}
+
+Algorithm~\ref{alg:phalcon} shows how PHALCON uses the goals from
+the previous section to guide successive rounds of program search.
+
+\begin{algorithm}[tb]
+\caption{PHALCON}
+\label{alg:phalcon}
+\begin{algorithmic}[1]
+\REQUIRE Task \((E,G)\), limit \(n_\pi\), stopping criterion
+\STATE \label{line:phalcon-grammar}
+  \(G_\pi \gets G\) extended with the output symbol \(y\)
+\STATE \label{line:phalcon-goals} \(\Pi \gets \emptyset\)
+\WHILE{the stopping criterion is unmet}\label{line:phalcon-loop}
+    \STATE \label{line:phalcon-gp} \((p^*,F) \gets \mathrm{GP}(E,G,\Pi)\)
+    \STATE \label{line:phalcon-solved}
+      \textbf{if} \(p^* \ne \bot\) \textbf{then return} \(p^*\)
+    \STATE \label{line:phalcon-candidates}
+      \(C \gets\) first \(n_\pi\) candidates from \(G_\pi\) using \(y\)
+    \STATE \label{line:phalcon-select} \(\displaystyle\pi \gets
+      \mathop{\arg\min}_{\pi'\in C,\,A_F(\pi')>0} A_F(\pi')\)
+    \STATE \label{line:phalcon-add} \(\Pi \gets \Pi \cup \{\pi\}\)
+\ENDWHILE
+\RETURN \label{line:phalcon-failure} \textsc{Failure}
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Initialization.}
+Line~\ref{line:phalcon-grammar} extends the program grammar with the
+output symbol \(y\), so candidate properties can inspect outputs.
+Line~\ref{line:phalcon-goals} initializes the goal set as empty.
+Line~\ref{line:phalcon-loop} starts the main loop, which repeats until
+the stopping criterion is met or a solution is found.
+
+\paragraph{Satisfying Goals.}
+In line~\ref{line:phalcon-gp}, GP searches for programs that minimize
+the cost defined by the selected properties. GP stops when it finds
+an exact solution or reaches a zero-cost population. It returns the
+last population \(F\) and, if found, a solution \(p^*\).
+In that case, line~\ref{line:phalcon-solved} returns the solution immediately.
+
+\paragraph{Setting Goals.}
+Line~\ref{line:phalcon-candidates} enumerates \(n_\pi\) candidate
+goals, each containing the output rule.
+Line~\ref{line:phalcon-select} picks the goal with the smallest
+positive agreement count so that it is both attainable and selective.
+Line~\ref{line:phalcon-add} adds the selected property so that the next
+round searches for programs that satisfy it alongside earlier goals.
+
+If the stopping criterion is met before PHALCON finds an exact
+solution, line~\ref{line:phalcon-failure} returns \textsc{Failure}.
+
+\section{Evaluation}
+\label{sec:evaluation}
+
+We are unaware of another synthesis method that discovers symbolic
+properties for an individual task and updates them in response to the
+progress of search. We therefore use variants of PHALCON to isolate the
+contribution of its design choices. To assess whether this approach is
+viable alongside existing synthesis methods, we also compare it with
+informed and naive heuristic search, BUSTLE, and CrossBeam.
+
+We perform the following experiments:
+\begin{itemize}
+  \item \textbf{Experiment 1 (Baselines).} Compare PHALCON with both
+    heuristic baselines, BUSTLE, and CrossBeam.
+  \item \textbf{Experiment 2 (Agreement threshold).} Raise the
+    early-stop threshold above one agreeing program.
+  \item \textbf{Experiment 3 (Batch selection).} Replace one-by-one selection
+    with a batch from the initial sample.
+  \item \textbf{Experiment 4 (Domain-level selection).} Replace
+    task-specific properties with a shared set per domain.
+  \item \textbf{Ablation study 1 (Property budget).} Measure the
+    candidate evaluations needed to reach agreement one.
+  \item \textbf{Ablation study 2 (Population size).} Measure how
+    population size affects solve rates and search cost.
+\end{itemize}
+
+\subsection{Experimental Setup}
+We use SyGuS string and bit-vector transformation tasks because they
+are established inductive program synthesis benchmarks. We also use
+the ARC-AGI-1 training tasks, whose challenging grid transformations
+test the limits of PHALCON's guidance.
+For SyGuS, we use five-fold cross-validation, with fewer folds when a
+task has fewer than five examples. For ARC, we use the official training
+and test split. We count a fold as solved when the synthesized program
+passes every held-out example. Each trial has a 30-minute search budget.
+We measure solve rates against program evaluations and elapsed
+time.
+
+Unless stated otherwise, PHALCON uses a population of 100 and may
+evaluate up to 10,000 candidate properties per iteration. These settings
+are based on the ablation studies, which examine the cost of other
+property budgets and population sizes.
+
+\subsection{Experiment 1: Baselines}
+We compare PHALCON's overall synthesis performance with four baselines.
+The informed heuristic scores outputs by edit distance: Levenshtein
+distance for strings and Hamming distance for bit-vectors and ARC grids.
+The naive heuristic scores programs by the number of training
+input--output examples they solve exactly. BUSTLE and CrossBeam use
+learned heuristics to guide bottom-up string synthesis
+\citep{odena2021bustle,shi2022crossbeam}.
+
+Edit distance is an informative heuristic, so it gets one attempt. The naive heuristic provides
+coarser guidance, so it gets up to 20 attempts within the same
+30-minute budget.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/eval-heuristics.pdf}
+  \caption{Cumulative solve rates by program evaluations for PHALCON and the informed and naive heuristics on the SyGuS benchmarks.}
+  \label{fig:eval-heuristics}
+\end{figure}
+
+\subsection{Experiment 2: Agreement Threshold}
+This variant relaxes PHALCON's preference for selective properties.
+During candidate enumeration, it accepts the first property whose
+agreement count is positive and at most a given threshold. If no candidate
+qualifies within the budget, it uses the property with the smallest
+positive agreement count found. Raising the threshold can shorten
+property search while making it easier for the current population to
+satisfy the selected goal, but also making the property less informative
+for guiding search. We compare thresholds against standard
+PHALCON, which stops early only at an agreement count of one.
+We compare thresholds of 1, 5, 10, 25, 50, 99, and 100.
+Figure~\ref{fig:eval-threshold} shows the available comparisons.
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/eval-threshold.pdf}
+  \caption{Cumulative solve rates by program evaluations on matched SyGuS string folds. The run at threshold 99 is pending.}
+  \label{fig:eval-threshold}
+\end{figure}
+
+\subsection{Experiment 3: Batch Selection}
+This variant removes the feedback from guided search to subsequent goal
+selection. It collects a single initial sample of distinct output
+vectors and ranks candidate properties by their agreement on that
+sample. For the sampled population \(F\), define the agreement pattern
+of \(\pi\) as the set \(\{p\in F : p\mbox{ agrees with }\pi\}\).
+The batch keeps the first property for each distinct nonempty set and
+uses the most selective properties together as a fixed search cost. Standard PHALCON instead chooses each new property
+from the population produced under the previous goals. Varying the
+number of batch properties tests how much guidance a single sample can
+provide. The target sample size is the product of the requested number
+of properties and the population size. This gives the batch the same
+number of sampled programs per requested property as standard PHALCON.
+We request 5, 10, 20, or 40 properties, giving
+initial sample targets of 500, 1,000, 2,000, or 4,000 distinct output
+vectors, and compare with the iterative method at population 100.
+% Add results from the full batch runs when confirmed.
+
+\subsection{Experiment 4: Domain-Level Selection}
+This variant removes task-specific property selection. It derives a
+shared set of properties from sampled programs across the domain.
+Each synthesis trial uses the same properties to score agreement with
+its own target outputs. Comparing this fixed set with PHALCON tests the
+value of selecting properties for each task during search.
+% Finalize the domain-ranking protocol, comparison settings, and results.
+
+\subsection{Ablation Study 1: Property Budget}
+We measure how many candidates PHALCON evaluates before finding a
+property that agrees with exactly one program. We run selected SyGuS
+string, SyGuS bit-vector, and ARC tasks with a population of 20 and a
+budget of 50,000 candidate evaluations per property search. For ARC,
+each trial can select up to five properties.
+Figure~\ref{fig:eval-budget} shows where successful searches first
+reach agreement one relative to the standard budget of 10,000.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/eval-agreement-one-strings.png}\par
+  \includegraphics[width=\columnwidth]{figures/eval-agreement-one-bitvectors.png}\par
+  \includegraphics[width=\columnwidth]{figures/eval-agreement-one-arc.png}
+  \caption{Candidate evaluations to the first property with agreement
+  one. Bars show searches that reached agreement one within 50,000
+  evaluations; panel headings give the total number of recorded
+  searches. The dashed line marks the standard 10,000-candidate budget.}
+  \label{fig:eval-budget}
+\end{figure}
+
+\subsection{Ablation Study 2: Population Size}
+Population size determines how many distinct program behaviors can
+inform a property-selection round. A larger population can expose more
+partial matches while requiring more work to construct and evaluate.
+This ablation varies population size to assess that trade-off.
+We compare populations of 10, 25, 50, 100, 250, and 500 under the
+same per-iteration candidate cap (Figure~\ref{fig:eval-population}).
+
+\begin{figure}[!t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/eval-population.pdf}
+  \caption{Cumulative solve rates by program evaluations for six population sizes on matched SyGuS folds.}
+  \label{fig:eval-population}
+\end{figure}
+
+% Prior-work leads for the scoped novelty claim:
+% Probe: https://arxiv.org/abs/2010.08663
+% FrAngel: https://arxiv.org/abs/1811.05175
+\section{Related Work}
+\label{sec:related-work}
+
+\paragraph{Synthesis through Abstract Interpretation.}
+Abstract interpretation summarizes program behavior through selected
+properties \citep{cousot1977abstract}. In synthesis, these summaries can
+eliminate families of programs whose abstract behavior conflicts with
+the specification. Absynthe uses abstract interpretation to guide
+top-down synthesis \citep{guria2023absynthe}, while iterative
+forward--backward abstract interpretation combines information from
+partial programs and candidate subexpressions \citep{yoon2023inductive}.
+BLAZE refines abstractions to narrow an automaton representing candidate
+programs \citep{wang2018abstraction}.
+
+The effectiveness of this pruning depends on the abstraction and on
+sound abstract semantics for the grammar's operations. Properties must
+capture useful distinctions, and the abstract semantics must propagate
+them precisely enough to reject incompatible candidates. PHALCON
+evaluates generated properties on concrete candidate and target outputs.
+This lets it use a property as soon as it is generated, without deriving
+abstract transfer functions for that property. Its properties guide
+search by defining intermediate goals, while abstraction-based pruning
+uses sound approximations to rule out programs.
+
+\paragraph{Learning Heuristics with Properties.}
+Property signatures represent program behavior using a fixed collection
+of Boolean properties \citep{odena2020signatures}. Each property is
+evaluated across the examples and summarized according to whether it is
+always true, always false, or mixed. These signatures describe tasks and
+intermediate values for learned search heuristics. BUSTLE uses them to
+prioritize subexpressions during bottom-up synthesis
+\citep{odena2021bustle}. CrossBeam learns how to combine previously
+generated expressions \citep{shi2022crossbeam}, and LambdaBeam extends
+this approach to higher-order functions and lambda expressions
+\citep{shi2023lambdabeam}.
+
+These methods learn search guidance across collections of training
+tasks, using properties chosen for the domain. PHALCON generates and
+selects properties for the task being solved, then directly counts
+disagreements with the target property values. Its properties may return
+values of any type and retain agreement information for each example.
+Selecting a new property from the population produced under earlier
+goals also lets the guidance change with the progress of search.
+
+\paragraph{Adaptation from Partial Success.}
+Probe adapts grammar weights during synthesis using programs that solve
+a subset of the examples \citep{barke2020probe}. PHALCON also extracts
+guidance from the current search, but a candidate can support a property
+even when it produces no correct output. Agreement on one aspect of
+every target output can therefore supply an intermediate goal before
+search finds a program that solves any example exactly.
+
+\section{Discussion and Conclusion}
+\begin{itemize}
+    \item Use the three comparisons to decide which of PHALCON's investments earn back their search time and when the simpler variants are preferable.
+    \item Summarize what the trade-offs tell us about guiding synthesis with partial successes.
+\end{itemize}
+
+% Any appendix included in this PDF counts toward the seven content pages.
+% Place it before the bibliography. Optional technical supplements are separate PDFs.
+
+\bibliography{references}
+
+\end{document}
