@@ -1,6 +1,8 @@
 # AAAI-27 paper
 
-Project directory: `/Users/stef/Local documents/Thesis into paper`.
+Project directory: `/Users/stef/Local documents/Thesis into paper/phalcon_paper`.
+
+GitHub repository: https://github.com/StefRasing/phalcon_paper. The user uses this repository to sync with Overleaf.
 
 ## Chat titles
 
@@ -11,8 +13,10 @@ On the first turn in a fork, rename the current chat as soon as its scope is kno
 
 ## Files and builds
 
-- Edit `Manuscript/paper.tex` and add citations to `Manuscript/references.bib`. The manuscript uses the local AAAI 2027 style and anonymous submission mode. Use `Template/AnonymousSubmission2027.tex` and `Template/CameraReady2027.tex` as reference copies of the author guidelines.
-- Compile from `Manuscript/` with `latexmk -pdf -interaction=nonstopmode -halt-on-error -outdir="<build directory>" paper.tex`. The local TeX installation is under `/Library/TeX/texbin`. After a successful build, copy `paper.pdf` to `output/pdf/paper.pdf` for review. For review comments, identify the PDF page and the matching source passage.
+- The user handles Git pushes manually when ready to sync with Overleaf. Do not push unless the user explicitly requests it.
+- After making manuscript changes, or when the user asks to review changes they made, compile the complete paper locally and provide a link to the refreshed PDF. Fix compilation errors caused by your changes before handing over the result. Report any remaining build failure clearly.
+- Edit `paper.tex` and add citations to `references.bib`. The manuscript uses the local AAAI 2027 style and anonymous submission mode. Use `../Template/AnonymousSubmission2027.tex` and `../Template/CameraReady2027.tex` as reference copies of the author guidelines.
+- Compile from the repository root with `latexmk -pdf -interaction=nonstopmode -halt-on-error -outdir="<build directory>" paper.tex`. The local TeX installation is under `/Library/TeX/texbin`. After a successful build, copy `paper.pdf` to `../output/pdf/paper.pdf` for review. For review comments, identify the PDF page and the matching source passage.
 - Same-directory forks share the same manuscript files. Keep chapter edits scoped to the assigned section and preserve changes from other chats.
 
 ## Submission rules
